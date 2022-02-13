@@ -1,0 +1,5 @@
+std_msgs/Float32 r
+std_msgs/Float32 g
+std_msgs/Float32 b
+---
+geometry_msgs/PointStamped[] centroids
