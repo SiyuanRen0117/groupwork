@@ -1,0 +1,8 @@
+notes:
+job not done:
+1)
+parameter optimization;
+2)
+cubeCheck function bug;
+3)
+difference between g_cloud_filtered and g_cloud_plane (RVIZ);
