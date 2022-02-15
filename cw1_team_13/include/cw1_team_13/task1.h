@@ -63,8 +63,7 @@
   * variables that make up the class. The code for each function is in the
   * moveit_solution.cpp file.
   *
-  * \author Luke Beddow
-  * \author Maria Stamatopoulou
+
   */
 class SrvClass
 {
@@ -77,7 +76,7 @@ public: // set all following functions/variables to public access
     */
   SrvClass(ros::NodeHandle& nh);
 
-  /** \brief Service callback function for moving the arm. 
+  /** \brief Service callback function for task1 
     *
     * \input[in] request service request message 
     * \input[in] response service response message
@@ -87,22 +86,52 @@ public: // set all following functions/variables to public access
   bool
   task1_startCallback(cw1_team_13::task1_start::Request &request,
     cw1_team_13::task1_start::Response &response);
-  
+
+/** \brief MoveIt function for moving the move_group to the target position.
+    *
+    * \input[in] target_pose pose to move the arm to
+    *
+    * \return true if moved to target position 
+    */
   bool
   moveArm(geometry_msgs::Pose target_pose);
-  
+   
+
+  /** \brief MoveIt function for moving the gripper fingers to a new position. 
+    *
+    * \input[in] width desired gripper finger width
+    *
+    * \return true if gripper fingers are moved to the new position
+    */
+
   bool
   moveGripper(float width);
-
+  /** \brief Pick an object up with a given position.
+    * 
+    * \input[in] position the xyz coordinates where the gripper converges
+    */
   bool
   pick(geometry_msgs::Point position);
-
+   /** \brief Place an object up with a given position.
+    * 
+    * \input[in] position the xyz coordinates where the gripper converges
+    */
   bool
   place(geometry_msgs::Point position);
-
+   /** \brief Remove a collision object from the planning scene.
+    * 
+    * \input[in] object_name for the object to be removed
+    */
   void
   removeCollisionObject(std::string object_name);
-
+  /** \brief MoveIt function for adding a cuboid collision object in RViz
+    * and the MoveIt planning scene.
+    *
+    * \input[in] object_name name for the new object to be added
+    * \input[in] centre point at which to add the new object
+    * \input[in] dimensions dimensions of the cuboid to add in x,y,z
+    * \input[in] orientation rotation to apply to the cuboid before adding
+    */
   void
   addCollisionObject(std::string object_name,
     geometry_msgs::Point centre, geometry_msgs::Vector3 dimensions,
