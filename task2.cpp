@@ -3,6 +3,7 @@
 typedef pcl::PointXYZRGBA PointT;
 typedef pcl::PointCloud<PointT> PointC;
 typedef PointC::Ptr PointCPtr;
+typedef pcl::PointCloud<pcl::PointXYZ>::Ptr XYZPtr;
 
 ////////////////////////////////////////////////////////////////////////////////
 PCLTask::PCLTask(ros::NodeHandle &nh):
@@ -10,9 +11,12 @@ PCLTask::PCLTask(ros::NodeHandle &nh):
   g_cloud_filtered (new PointC), // filtered point cloud
   g_cloud_filtered2 (new PointC), // filtered point cloud
   g_cloud_plane (new PointC), // plane point cloud
-
   //GCLOUD STORE
   g_cloud_store (new PointC),
+
+  g_cloud_boundary (new pcl::PointCloud<pcl::PointXYZ>),
+  g_cloud_xyztransfer (new pcl::PointCloud<pcl::PointXYZ>),
+  
   g_cloud_cylinder (new PointC), // cylinder point cloud
   g_tree_ptr (new pcl::search::KdTree<PointT> ()), // KdTree
   g_cloud_normals (new pcl::PointCloud<pcl::Normal>), // segmentation
@@ -30,10 +34,10 @@ PCLTask::PCLTask(ros::NodeHandle &nh):
   
   // Define the publishers
   g_pub_cloud = nh.advertise<sensor_msgs::PointCloud2> ("filtered_cloud", 1, true);
-  // Define the publishers
   g_pub_cloud2 = nh.advertise<sensor_msgs::PointCloud2> ("print_cloud", 1, true);
-  //********************CHANGE POSE HERE*****************************
-  g_pub_pose = nh.advertise<geometry_msgs::PointStamped> ("cyld_pt", 1, true);
+
+  //********************CHANGE POSE HERE*****************************8
+  //g_pub_pose = nh.advertise<geometry_msgs::PointStamped> ("cyld_pt", 1, true);
   
   // Define public variables
   g_vg_leaf_sz = 0.01; // VoxelGrid leaf size: Better in a config file
@@ -55,26 +59,21 @@ PCLTask::cloudCallBackOne
   pcl::fromPCLPointCloud2 (g_pcl_pc, *g_cloud_ptr);
 
   // Perform the filtering
-  g_vg_leaf_sz = 0.01;
   applyVX (g_cloud_ptr, g_cloud_filtered);
   applyPT (g_cloud_ptr, g_cloud_filtered);
-
-  int size_filtered_cloud = g_cloud_filtered2 ->size ();
-  if(size_filtered_cloud != 0)
-      {      
-        findNormals (g_cloud_filtered2);
-        segPlane (g_cloud_filtered2);
-        ROS_INFO_STREAM ("PointCloud representing the planar component: "
-                  << g_cloud_plane->size ()
-                  << " data points.");
-      } 
-
-  pubFilteredPCMsg (g_pub_cloud, *g_cloud_plane);
-  pubFilteredPCMsg (g_pub_cloud2, *g_cloud_filtered2);
-
+  
+  // Segment plane
+  //findNormals (g_cloud_filtered);
+  //segPlane (g_cloud_filtered);
+  BoundaryDetection(g_cloud_filtered);
+  checkcube(g_cloud_filtered2);
+  //findCylPose (g_cloud_cylinder);
+    
   // Publish the data
   //ROS_INFO ("Publishing Filtered Cloud 2");
-  //pubFilteredPCMsg (g_pub_cloud, *g_cloud_filtered);
+  pubFilteredPCMsg (g_pub_cloud, *g_cloud_filtered);
+  pubFilteredPCMsg (g_pub_cloud2, *g_cloud_filtered);
+  
   
   return;
 }
@@ -161,7 +160,14 @@ PCLTask::movecamera_left_to_right(){
   q_object.setRPY(0, 0, angle_offset_);
   tf2::Quaternion q_result = q_x180deg * q_object;
   geometry_msgs::Quaternion grasp_orientation = tf2::toMsg(q_result);
-
+  
+  /*
+  geometry_msgs::Pose corner_right_up;
+  corner_right_up.position.x = -0.4;
+  corner_right_up.position.y = 0.4;
+  corner_right_up.position.z = 0.4;
+  corner_right_up.orientation = grasp_orientation;
+  */
   geometry_msgs::Pose corner_left_down;
   corner_left_down.position.x = 0.45;
   corner_left_down.position.y = -0.4;
@@ -170,32 +176,13 @@ PCLTask::movecamera_left_to_right(){
   
 
   //left close to right 
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 12; i++) {
       bool success_move = moveArm(corner_left_down);
+      corner_left_down.position.y += 0.05;
       ROS_INFO_STREAM(i);
       ROS_INFO_STREAM(success_move);
       ROS_INFO("SUCCESSSSSSSSSSSSSSSSSSSSS MOVE corner_right_down");
-
-      g_cloud_filtered2 = g_cloud_filtered;
-
-      //bug
-      if (i%5 == 0){
-        //seg cube:
-        // Segment plane
-        // STORE GLOUD FOR CHECKCUBE !!!!!!!
-        //checkcube(*g_cloud_filtered);
-        ROS_INFO_STREAM(i);
-        ROS_INFO("SUCCESSSSSSSSSSSSSSSSSSSSS check");
-      }
-      //checkcube(g_cloud_plane);
-      corner_left_down.position.y += 0.05;
-      ROS_INFO("SUCCESSSSSSSSSSSSSSSSSSSSS check");
-      ros::Duration(1.0).sleep();
-    }
-
-  
-  //findCylPose (g_cloud_cylinder);
-  
+    } 
 
 }
 
@@ -269,7 +256,7 @@ PCLTask::segPlane (PointCPtr &in_cloud_ptr)
 {
   // Create the segmentation object for the planar model
   // and set all the params
-  // plane or normal plane? 
+  // plane or normal plane?
   g_seg.setOptimizeCoefficients (true);
   g_seg.setModelType (pcl::SACMODEL_NORMAL_PLANE);
   g_seg.setNormalDistanceWeight (0.1); //bad style
@@ -283,7 +270,7 @@ PCLTask::segPlane (PointCPtr &in_cloud_ptr)
 
   int num = g_inliers_plane->indices.size();
   ROS_INFO_STREAM(num);
-
+  
   // Extract the planar inliers from the input cloud
   g_extract_pc.setInputCloud (in_cloud_ptr);
   g_extract_pc.setIndices (g_inliers_plane);
@@ -291,6 +278,7 @@ PCLTask::segPlane (PointCPtr &in_cloud_ptr)
   
   // Write the planar inliers to disk
   g_extract_pc.filter (*g_cloud_plane);
+
   //ROS_INFO_STREAM ("Plane coefficients: " << *g_coeff_plane);
   ROS_INFO_STREAM ("PointCloud representing the planar component: "
                    << g_cloud_plane->size ()
@@ -302,6 +290,9 @@ void
 PCLTask::checkcube(PointCPtr &in_cloud_ptr)
 {
   int size = in_cloud_ptr->size ();
+  ROS_INFO_STREAM(size);
+  ROS_INFO_STREAM ("PointCloud2 position xxxxxxxxxxxxxxxxxxxxxxxx: "
+                   << (int)in_cloud_ptr->points[1].x);
   float points_r [size];
   float points_g [size];
   float points_b [size];
@@ -311,7 +302,7 @@ PCLTask::checkcube(PointCPtr &in_cloud_ptr)
   int points_g_unique [size];
   int points_b_unique [size];
 
-  
+  /*
   for (int i = 0; i < size; i++) {
     int r = (int)in_cloud_ptr->points[i].r;
     int g = (int)in_cloud_ptr->points[i].g;
@@ -337,41 +328,8 @@ PCLTask::checkcube(PointCPtr &in_cloud_ptr)
       arr[i] = vector[i];
   }
   //ROS_INFO_STREAM(arr);
+  */
 
-
-}
-
-
-////////////////////////////////////////////////////////////////////////////////
-void
-PCLTask::findCylPose (PointCPtr &in_cloud_ptr)
-{
-  Eigen::Vector4f centroid_in;
-  pcl::compute3DCentroid(*in_cloud_ptr, centroid_in);
-  
-  g_cyl_pt_msg.header.frame_id = g_input_pc_frame_id_;
-  g_cyl_pt_msg.header.stamp = ros::Time (0);
-  g_cyl_pt_msg.point.x = centroid_in[0];
-  g_cyl_pt_msg.point.y = centroid_in[1];
-  g_cyl_pt_msg.point.z = centroid_in[2];
-  
-  // Transform the point to new frame
-  geometry_msgs::PointStamped g_cyl_pt_msg_out;
-  try
-  {
-    g_listener_.transformPoint ("panda_link0",  // bad styling
-                                g_cyl_pt_msg,
-                                g_cyl_pt_msg_out);
-    //ROS_INFO ("trying transform...");
-  }
-  catch (tf::TransformException& ex)
-  {
-    ROS_ERROR ("Received a trasnformation exception: %s", ex.what());
-  }
-  
-  publishPose (g_cyl_pt_msg_out);
-  
-  return;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -386,14 +344,51 @@ PCLTask::pubFilteredPCMsg (ros::Publisher &pc_pub,
   return;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-void
-PCLTask::publishPose (geometry_msgs::PointStamped &cyl_pt_msg)
-{
-  // Create and publish the cylinder pose (ignore orientation)
 
-  g_pub_pose.publish (cyl_pt_msg);
+void
+PCLTask::BoundaryDetection(PointCPtr &in_cloud_ptr)
+{
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>); 
+  pcl::copyPointCloud(*in_cloud_ptr, *cloud);
+
+  //pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_boundary (new pcl::PointCloud<pcl::PointXYZ>); 
   
+  //float re = 0.03;
+  //float reforn = 0.05;
+  pcl::PointCloud<pcl::Boundary> boundaries; 
+	pcl::BoundaryEstimation<pcl::PointXYZ, pcl::Normal, pcl::Boundary> boundEst; 
+	pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normEst; 
+	pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>); 
+	
+	normEst.setInputCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr(cloud)); 
+	normEst.setRadiusSearch(0.1);
+	normEst.compute(*normals); 
+ 
+	boundEst.setInputCloud(cloud); 
+	boundEst.setInputNormals(normals); 
+	//boundEst.setRadiusSearch(re); 
+	//boundEst.setAngleThreshold(M_PI/4); 
+	boundEst.setSearchMethod(pcl::search::KdTree<pcl::PointXYZ>::Ptr (new pcl::search::KdTree<pcl::PointXYZ>)); 
+	boundEst.setKSearch(50);
+  boundEst.compute(boundaries); 
+ 
+	for(int i = 0; i < cloud->points.size(); i++) 
+	{ 
+		
+		if(boundaries[i].boundary_point > 0) 
+		{ 
+			g_cloud_boundary->push_back(cloud->points[i]); 
+		} 
+	}
+
+  //g_cloud_boundary = cloud_boundary;
+
+  ROS_INFO_STREAM ("PointCloud representing the BBBBBBBBBBBBBOUNDARY: "
+                   <<g_cloud_boundary->size ()
+                   << " data points.");
+  pcl::copyPointCloud(*g_cloud_boundary, *g_cloud_filtered2);
+  
+
   return;
 }
-
